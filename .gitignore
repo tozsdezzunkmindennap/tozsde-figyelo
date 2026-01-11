@@ -1,0 +1,10 @@
+# Felhasználói adatok (Jelszavak és ID-k)
+users.json
+
+# Ideiglenes fájlok és gyorsítótár
+__pycache__/
+.streamlit/
+*.pyc
+
+# Trendek (opcionális, ha ezt sem akarod megosztani)
+trends.json
