@@ -3,37 +3,33 @@ import yfinance as yf
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from streamlit_gsheets import GSheetsConnection
 
 # --- 1. KONFIGURÁCIÓ ---
-ADMIN_CHAT_ID = "8385947337" 
+ADMIN_CHAT_ID = "8385947337"
 TELEGRAM_TOKEN = "8350650650:AAFQ24n1nKNn0wIbTfG-yPRuwFQPpZHmujY"
 
-# A TE TÁBLÁZATOD LINKJE KÖZVETLENÜL BEÉPÍTVE
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1uEeTzFcyZyDFpNxzcxVa7tjQAraUUO-A510Z7yCpmm8/edit?usp=sharing"
+# A TE TÁBLÁZATOD FIX ADATAI
+SHEET_ID = "1uEeTzFcyZyDFpNxzcxVa7tjQAraUUO-A510Z7yCpmm8"
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Users"
 
 try:
     FINNHUB_KEY = st.secrets["FINNHUB_API_KEY"]
     KLUB_JELSZO = st.secrets["KLUB_JELSZO"]
-    APP_URL = st.secrets.get("APP_URL", "https://tozsdekiralyok.streamlit.app")
 except:
-    # Tartalék értékek, ha a Secrets nincs beállítva
     FINNHUB_KEY = "d5i1j79r01qu7bqqnu4gd5i1j79r01qu7bqqnu50"
     KLUB_JELSZO = "Tozsdekiralyok2025"
-    APP_URL = "https://tozsdekiralyok.streamlit.app"
-
-# Adatbázis kapcsolat inicializálása a beépített linkkel
-conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- 2. FUNKCIÓK ---
 
-def get_users():
-    """Lekéri a felhasználókat a megadott Google Táblázatból"""
+def get_users_direct():
+    """Közvetlen CSV letöltés a Google Táblázatból"""
     try:
-        # Itt kényszerítjük a megadott link használatát
-        return conn.read(spreadsheet=SHEET_URL, worksheet="Users", ttl=0)
+        # Tisztított beolvasás
+        df = pd.read_csv(SHEET_URL)
+        df.columns = [c.strip().lower() for c in df.columns]
+        return df
     except Exception as e:
-        st.error(f"Táblázat hiba: {e}")
+        st.error(f"Adatbázis kapcsolódási hiba. Ellenőrizd a táblázat megosztását! Részletek: {e}")
         return pd.DataFrame(columns=["name", "telegram_id", "status"])
 
 def send_telegram_msg(chat_id, message):
@@ -41,7 +37,8 @@ def send_telegram_msg(chat_id, message):
     try:
         requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=5)
         return True
-    except: return False
+    except:
+        return False
 
 def get_finnhub_news(ticker):
     to_date = datetime.now().strftime('%Y-%m-%d')
@@ -50,95 +47,96 @@ def get_finnhub_news(ticker):
     try:
         r = requests.get(url, timeout=5)
         return r.json() if r.status_code == 200 else []
-    except: return []
+    except:
+        return []
 
-# --- 3. PIACI ADATOK ---
-MARKET_DATA = {
-    "🇺🇸 Tech Óriások": ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "NFLX"],
-    "₿ Kriptovaluták": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD"],
-    "🇭🇺 Magyar Piac": ["OTP.BU", "MOL.BU", "RICHT.BU", "4IG.BU", "MTEL.BU"]
-}
-
-# --- 4. APP LOGIKA ---
+# --- 3. STREAMLIT APP BEÁLLÍTÁSOK ---
 st.set_page_config(page_title="TőzsdeKirályok VIP", page_icon="💰", layout="wide")
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ["NVDA", "BTC-USD"]
 
-# Felhasználók betöltése a táblázatból
-users_df = get_users()
+# Felhasználók listájának frissítése
+users_df = get_users_direct()
 
-# --- 5. LOGIN & AUTOMATA REGISZTRÁCIÓ ---
+# --- 4. BELÉPÉS ÉS JELENTKEZÉS ---
 if not st.session_state.logged_in:
-    st.title("🔐 TőzsdeKirályok VIP Klub")
-    tab1, tab2 = st.tabs(["🔑 Belépés", "📝 Tagság igénylése"])
+    st.title("🔐 TőzsdeKirályok VIP")
+    t1, t2 = st.tabs(["🔑 Belépés", "📝 Jelentkezés"])
     
-    with tab1:
-        with st.form("login"):
-            l_name = st.text_input("Név")
-            l_id = st.text_input("Telegram ID")
+    with t1:
+        with st.form("login_form"):
+            l_id = st.text_input("Saját Telegram ID")
             l_pw = st.text_input("Jelszó", type="password")
             if st.form_submit_button("Belépés"):
-                # Ellenőrzés: admin vagy jóváhagyott tag?
-                user_check = users_df[(users_df['telegram_id'].astype(str) == str(l_id)) & (users_df['status'] == 'Approved')]
-                if l_pw == KLUB_JELSZO and (not user_check.empty or str(l_id) == ADMIN_CHAT_ID):
+                # ID és Státusz ellenőrzése a táblázatban
+                is_approved = not users_df[(users_df['telegram_id'].astype(str) == str(l_id)) & 
+                                           (users_df['status'].str.lower() == 'approved')].empty
+                
+                if l_pw == KLUB_JELSZO and (is_approved or str(l_id) == ADMIN_CHAT_ID):
                     st.session_state.logged_in = True
-                    st.session_state.user_name = l_name
                     st.session_state.user_id = str(l_id)
                     st.rerun()
                 elif l_pw == KLUB_JELSZO:
                     st.warning("A regisztrációd még jóváhagyásra vár!")
-                else: st.error("Hibás jelszó vagy ID!")
+                else:
+                    st.error("Hibás adatok!")
 
-    with tab2:
-        st.info("Mielőtt jelentkezel, indítsd el a botot Telegramon!")
-        with st.form("reg"):
+    with t2:
+        with st.form("reg_form"):
             r_name = st.text_input("Teljes neved")
             r_id = st.text_input("Telegram ID-d")
-            if st.form_submit_button("Jelentkezés elküldése"):
+            if st.form_submit_button("Jelentkezés küldése"):
                 if r_name and r_id:
-                    # Mentés a táblázatba (Pending státusszal)
-                    new_member = pd.DataFrame([{"name": r_name, "telegram_id": str(r_id), "status": "Pending"}])
-                    updated_df = pd.concat([users_df, new_member], ignore_index=True)
-                    conn.update(spreadsheet=SHEET_URL, worksheet="Users", data=updated_df)
-                    
-                    send_telegram_msg(ADMIN_CHAT_ID, f"🔔 ÚJ JELENTKEZŐ: {r_name}\nID: {r_id}\nJóváhagyhatod az appban!")
-                    st.success("Sikeres jelentkezés! Az admin hamarosan értesít.")
-                else: st.error("Töltsd ki az adatokat!")
+                    msg = f"🔔 ÚJ JELENTKEZŐ!\nNév: {r_name}\nID: {r_id}\n\nFrissítsd a táblázatot 'Approved'-ra a belépéshez!"
+                    send_telegram_msg(ADMIN_CHAT_ID, msg)
+                    st.success("Jelentkezés elküldve!")
+                else:
+                    st.error("Hiányzó adatok!")
 
-# --- 6. BELSŐ FELÜLET & ADMIN PANEL ---
+# --- 5. BELSŐ FELÜLET ---
 else:
     with st.sidebar:
-        st.title(f"👤 {st.session_state.user_name}")
+        st.title(f"👤 VIP ID: {st.session_state.user_id}")
         
-        # ADMIN PANEL (Csak neked)
+        # Csak neked: Admin nézet a táblázathoz
         if st.session_state.user_id == ADMIN_CHAT_ID:
-            st.divider()
-            st.subheader("🛠️ Admin Jóváhagyás")
-            pending_list = users_df[users_df['status'] == 'Pending']
-            if not pending_list.empty:
-                to_approve = st.selectbox("Várakozók:", pending_list['name'].tolist())
-                if st.button("✅ Jóváhagyás"):
-                    # Frissítés a táblázatban
-                    users_df.loc[users_df['name'] == to_approve, 'status'] = 'Approved'
-                    conn.update(spreadsheet=SHEET_URL, worksheet="Users", data=users_df)
-                    
-                    # Automata üzenet küldése
-                    target_id = pending_list[pending_list['name'] == to_approve]['telegram_id'].values[0]
-                    welcome = f"🎉 Szia {to_approve}!\n\nJóváhagytunk! ✅\n🔑 Jelszó: {KLUB_JELSZO}\n🌐 URL: {APP_URL}"
-                    send_telegram_msg(target_id, welcome)
-                    st.success(f"{to_approve} aktiválva!")
+            with st.expander("🛠️ Admin: Aktuális adatbázis"):
+                st.dataframe(users_df)
+                if st.button("🔄 Adatok frissítése"):
                     st.rerun()
-            else:
-                st.write("Nincs új jelentkező.")
 
         st.divider()
+        st.header("📂 Portfólió")
+        MARKET_DATA = {
+            "🇺🇸 Tech": ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "GOOGL", "META"],
+            "₿ Kripto": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
+            "🇭🇺 Magyar": ["OTP.BU", "MOL.BU", "RICHT.BU", "4IG.BU"]
+        }
+        cat = st.selectbox("Kategória:", list(MARKET_DATA.keys()))
+        ticker = st.selectbox("Papír:", MARKET_DATA[cat])
+        if st.button("➕ Hozzáadás"):
+            if ticker not in st.session_state.watchlist:
+                st.session_state.watchlist.append(ticker)
+                st.rerun()
+        
         if st.button("🚪 Kijelentkezés"):
             st.session_state.logged_in = False
             st.rerun()
 
-    # --- MONITOR RÉSZ ---
-    st.title("📊 VIP Portfólió Monitor")
-    if 'watchlist' not in st.session_state: st.session_state.watchlist = ["NVDA", "BTC-USD"]
-    
-    # ... (A korábbi piaci adatok és hírek megjelenítése változatlanul folytatódik idelent)
+    st.title("📊 VIP Élő Monitor")
+    for t in st.session_state.watchlist:
+        with st.expander(f"🔍 {t} Részletek", expanded=True):
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.line_chart(yf.Ticker(t).history(period="1mo")['Close'])
+                if st.button(f"🗑️ Törlés: {t}", key=f"del_{t}"):
+                    st.session_state.watchlist.remove(t)
+                    st.rerun()
+            with col2:
+                st.write("**Hírek:**")
+                news = get_finnhub_news(t)
+                for n in news[:2]:
+                    st.markdown(f"* **[{n.get('headline','')}]({n.get('url','#')})**")
