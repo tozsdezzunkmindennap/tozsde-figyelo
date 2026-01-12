@@ -13,27 +13,28 @@ except:
     FINNHUB_KEY = "d5i1j79r01qu7bqqnu4gd5i1j79r01qu7bqqnu50"
     KLUB_JELSZO = "Tozsdekiralyok2025"
 
-def get_yahoo_suggestions(query):
-    if not query or len(query) < 2: return []
-    url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        r = requests.get(url, headers=headers)
-        data = r.json()
-        return [f"{res['symbol']} ({res.get('shortname', 'Ismeretlen')})" for res in data.get('quotes', []) if 'symbol' in res]
-    except: return []
+MARKET_DATA = {
+    "🇺🇸 Tech Óriások": ["NVDA", "AAPL", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "NFLX", "AMD", "PLTR"],
+    "₿ Kriptovaluták": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "ADA-USD", "DOGE-USD"],
+    "🇭🇺 Magyar Részvények": ["OTP.BU", "MOL.BU", "RICHT.BU", "4IG.BU", "MTEL.BU"],
+    "🏎️ Autóipar & EV": ["RIVN", "LCID", "NIO", "F", "GM", "BYDDF"],
+    "🏦 Bank & Pénzügy": ["JPM", "BAC", "V", "MA", "PYPL", "COIN"]
+}
 
 def get_finnhub_news(ticker):
-    """Hírek lekérése az elmúlt 7 napból"""
+    """Hírek lekérése csak akkor, ha szükség van rá"""
     to_date = datetime.now().strftime('%Y-%m-%d')
     from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
     url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={from_date}&to={to_date}&token={FINNHUB_KEY}"
     try:
-        r = requests.get(url)
+        r = requests.get(url, timeout=5)
         if r.status_code == 200:
             return r.json()
+        elif r.status_code == 429:
+            return "LIMIT" # Túl sok kérés hiba
         return []
-    except: return []
+    except:
+        return []
 
 st.set_page_config(page_title="TőzsdeKirályok VIP", page_icon="💰", layout="wide")
 
@@ -59,27 +60,26 @@ else:
     with st.sidebar:
         st.title(f"👤 {st.session_state.user_name}")
         st.divider()
-        st.header("🔍 Yahoo Kereső")
-        search_query = st.text_input("Kezdd el írni (pl. Apple):")
-        suggestions = get_yahoo_suggestions(search_query)
+        st.header("📂 Böngészés")
+        cat = st.selectbox("Válassz kategóriát:", list(MARKET_DATA.keys()))
+        selected_ticker = st.selectbox("Választható:", MARKET_DATA[cat])
         
-        if suggestions:
-            selected_full = st.selectbox("Találatok:", suggestions)
-            if st.button("➕ Hozzáadás"):
-                new_ticker = selected_full.split(" ")[0]
-                if new_ticker not in st.session_state.watchlist:
-                    st.session_state.watchlist.append(new_ticker)
-                    st.rerun()
-        
+        if st.button("➕ Hozzáadás"):
+            if selected_ticker not in st.session_state.watchlist:
+                st.session_state.watchlist.append(selected_ticker)
+                st.rerun()
+
         st.divider()
         period = st.radio("Változás mutató:", ["1D", "1W", "1M"])
+        
         if st.button("🚪 Kijelentkezés"):
             st.session_state.logged_in = False
             st.rerun()
 
     # --- FŐOLDAL ---
-    st.title("📊 Portfólió Monitor")
+    st.title("📊 Személyes Monitor")
     
+    # Gyors árak táblázat
     if st.session_state.watchlist:
         p_map = {"1D": "2d", "1W": "10d", "1M": "35d"}
         quick_list = []
@@ -97,33 +97,31 @@ else:
 
     st.divider()
     
-    # --- RÉSZLETEK ÉS HÍREK ---
-    st.subheader("📰 Legfrissebb hírek és elemzések")
+    # --- RÉSZLETEK (Lusta betöltésű hírekkel) ---
     for t in st.session_state.watchlist:
-        with st.expander(f"🔍 {t} részletes adatok és hírek"):
+        # Minden részvény egy külön lenyíló ablak
+        with st.expander(f"🔍 {t} részletek és hírek"):
             c1, c2 = st.columns([1, 2])
+            
             with c1:
-                st.write(f"**{t} Grafikon (30 nap)**")
+                st.write(f"**{t} Grafikon**")
+                # Csak akkor kér le adatot, ha az expander nyitva van
                 st.line_chart(yf.Ticker(t).history(period="1mo")['Close'])
                 if st.button(f"🗑️ Törlés: {t}", key=f"del_{t}"):
                     st.session_state.watchlist.remove(t)
                     st.rerun()
             
             with c2:
-                st.write("**Finnhub Hírcsatorna**")
+                st.write("**Legfrissebb hírek**")
+                # Hírek lekérése csak MOST történik meg
                 news = get_finnhub_news(t)
-                if isinstance(news, list) and len(news) > 0:
-                    for n in news[:5]: # Most már újra az első 5 hírt mutatjuk
-                        headline = n.get('headline', 'Nincs cím')
-                        url = n.get('url', '#')
-                        source = n.get('source', 'Ismeretlen')
-                        summary = n.get('summary', '')
-                        dt = datetime.fromtimestamp(n.get('datetime', 0)).strftime('%Y-%m-%d %H:%M')
-                        
-                        st.markdown(f"**[{headline}]({url})**")
-                        st.caption(f"📅 {dt} | Forrás: {source}")
-                        if summary:
-                            st.write(f"_{summary[:200]}_...")
+                
+                if news == "LIMIT":
+                    st.warning("⚠️ Túl sok kérés! Várj egy percet a hírek frissítéséhez.")
+                elif isinstance(news, list) and len(news) > 0:
+                    for n in news[:3]:
+                        st.markdown(f"**[{n.get('headline', '')}]({n.get('url', '#')})**")
+                        st.caption(f"{n.get('source', 'Ismeretlen')} | {datetime.fromtimestamp(n.get('datetime', 0)).strftime('%Y-%m-%d')}")
                         st.divider()
                 else:
-                    st.info("Ehhez a részvényhez most nincsenek friss hírek.")
+                    st.info("Ehhez a tickerhez jelenleg nincsenek friss hírek.")
